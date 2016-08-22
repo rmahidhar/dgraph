@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package graphpb;
+
+enum Operation { UNKNOWN = 0; ADD_NODE = 1; ADD_EDGE = 2; SET_EDGE_PROPERTY = 3; SET_NODE_PROPERTY = 4; }
+
+message AnyValue {
+    enum Type { UNKNOWN = 0; INT = 1; FLOAT = 2; STRING = 3; }
+    Type type = 1;
+    int32 intVal = 2;
+    float floatVal = 3;
+    string stringVal = 4;
+}
+
+message Node {
+    string name = 1;
+}
+
+message Edge {
+    string srcNode = 1;
+    string dstNode = 2;
+}
+
+message EdgeProperty {
+    string srcNode = 1;
+    string dstNode = 2;
+    string property = 3;
+    AnyValue value = 4;
+}
+
+message NodeProperty {
+    string name = 1;
+    string property = 2;
+    AnyValue value = 3;
+}
+
+message GraphMsg {
+    Operation oper = 1;
+    bytes msg = 2;
+}

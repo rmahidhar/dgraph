@@ -8,21 +8,14 @@ import (
     "sync"
     "github.com/rmahidhar/graph"
     "github.com/rmahidhar/graph/adjlist"
+    "github.com/rmahidhar/dgraph/graphpb"
+    "github.com/golang/protobuf/proto"
 )
 
 type dgraph struct {
 	proposeC chan<- string // channel for proposing updates
 	mutex  sync.RWMutex
 	graph  graph.Graph
-}
-
-type node struct {
-    Name string
-}
-
-type edge struct {
-    Src string
-    Dst string
 }
 
 type edgeProperty struct {
@@ -50,21 +43,33 @@ func newDGraph(proposeC chan<- string, // write channel
 }
 
 func (g *dgraph) ProposeNode(n string) {
-    var buf bytes.Buffer
-    if err := gob.NewEncoder(&buf).Encode(node{n}); err != nil {
-        log.Fatal(err)
+    node := &graphpb.Node{Name: n}
+    if bytes, err := proto.Marshal(node); err != nil {
+        log.Fatalln("Failed to encode node:", err)
+    } else {
+        msg := &graphpb.GraphMsg{Oper: graphpb.Operation_ADD_NODE, Msg: bytes}
+        if bytes, err = proto.Marshal(msg); err == nil {
+            fmt.Printf("ProposeNode Added vertex: %s\n", n)
+            g.proposeC <- string(bytes)
+        } else {
+            log.Fatalln("Failed to encode graph message:", err)
+        }
     }
-    fmt.Printf("ProposeNode Added vertex: %s\n", n)
-    g.proposeC <- string(buf.Bytes())
 }
 
 func (g *dgraph) ProposeEdge(src string, dst string) {
-    var buf bytes.Buffer
-    if err := gob.NewEncoder(&buf).Encode(edge{src, dst}); err != nil {
-        log.Fatal(err)
+    edge := &graphpb.Edge{SrcNode: src, DstNode: dst}
+    if bytes, err := proto.Marshal(edge); err != nil {
+        log.Fatalln("Failed to encode edge:", err)
+    } else {
+        msg := &graphpb.GraphMsg{Oper: graphpb.Operation_ADD_EDGE, Msg: bytes}
+        if bytes, err = proto.Marshal(msg); err == nil {
+            fmt.Printf("ProposeEdge Added edge: %s -> %s\n", src, dst)
+            g.proposeC <- string(bytes)
+        } else {
+            log.Fatalln("Failed to encode graph message:", err)
+        }
     }
-    fmt.Printf("ProposeEdge Added edge: %s -> %s\n", src, dst)
-    g.proposeC <- string(buf.Bytes())
 }
 
 func (g *dgraph) ProposeNodeProperty(node string, property string, value interface{}) {
@@ -90,40 +95,34 @@ func (g *dgraph) readCommits(commitC <-chan *string, errorC <-chan error) {
             return;
         }
 
-        var n node
-        var e edge
-        var np nodeProperty
-        var ep edgeProperty
+        msg := &graphpb.GraphMsg{}
 
-        dec := gob.NewDecoder(bytes.NewBufferString(*data))
-        if err := dec.Decode(&n); err == nil {
+        if err := proto.Unmarshal([]byte(*data), msg); err == nil {
             g.mutex.Lock()
-            g.graph.AddVertex(n.Name)
-            fmt.Printf("Added vertex: %s\n", n.Name)
+            switch msg.Oper {
+            case graphpb.Operation_ADD_NODE:
+                n := &graphpb.Node{}
+                if err = proto.Unmarshal(msg.Msg, n); err == nil {
+                    g.graph.AddVertex(n.Name)
+                    fmt.Printf("Added vertex: %s\n", n.Name)
+                } else {
+                    log.Fatalf("dgraph: could not decode node message (%v)", err)
+                }
+            case graphpb.Operation_ADD_EDGE:
+                e := &graphpb.Edge{}
+                if err = proto.Unmarshal(msg.Msg, e); err == nil {
+                    g.graph.AddEdge(e.SrcNode, e.DstNode)
+                    fmt.Printf("Added edge: %s -> %s\n", e.SrcNode, e.DstNode)
+                } else {
+                    log.Fatalf("dgraph: could not decode edge message (%v)", err)
+                }
+            default:
+                log.Fatalf("dgraph: invalid message type (%d)", msg.Oper)
+            }
             g.mutex.Unlock()
+        } else {
+            log.Fatalf("dgraph: could not decode graph message (%v)", err)
         }
-        dec = gob.NewDecoder(bytes.NewBufferString(*data))
-        if err := dec.Decode(&e); err == nil {
-            g.mutex.Lock()
-            g.graph.AddEdge(e.Src, e.Dst)
-            fmt.Printf("Added edge: %s -> %s\n", e.Src, e.Dst)
-            g.mutex.Unlock()
-        }
-        dec = gob.NewDecoder(bytes.NewBufferString(*data))
-        if err := dec.Decode(&np); err == nil {
-            //g.mutex.Lock()
-            //g.graph.SetEdgeProperty(ep.src, ep.dst, ep.property, ep.value)
-            //g.mutex.Unlock()
-        }
-        dec = gob.NewDecoder(bytes.NewBufferString(*data))
-        if err := dec.Decode(&ep); err == nil {
-            g.mutex.Lock()
-            g.graph.SetEdgeProperty(ep.Src, ep.Dst, ep.Property, ep.Value)
-            g.mutex.Unlock()
-        }
-//else {
-//            log.Fatalf("dgraph: could not decode message (%v)", err)
-//        }
     }
 
     if err, ok := <-errorC; ok {
